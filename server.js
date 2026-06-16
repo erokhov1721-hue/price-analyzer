@@ -3,8 +3,10 @@ const express = require('express');
 const multer  = require('multer');
 const path    = require('path');
 const fs      = require('fs');
-const analyze = require('./analyze');
-const db      = require('./lib/db');
+const analyze  = require('./analyze');
+const parseKP  = require('./kpParser');
+const applyKP  = require('./kpApplier');
+const db       = require('./lib/db');
 
 const app  = express();
 const PORT = process.env.PORT || 3000;
@@ -19,6 +21,14 @@ const upload = multer({
   dest: TMP,
   fileFilter: (req, file, cb) =>
     cb(null, path.extname(file.originalname).toLowerCase() === '.xlsx'),
+});
+
+const uploadKP = multer({
+  dest: TMP,
+  fileFilter: (req, file, cb) => {
+    const ext = path.extname(file.originalname).toLowerCase();
+    cb(null, ['.pdf', '.xlsx', '.xls'].includes(ext));
+  },
 });
 
 // ── Projects ──────────────────────────────────────────────────────────────────
@@ -105,6 +115,34 @@ app.post('/api/projects/:id/analyze', upload.single('file'), async (req, res) =>
   } catch (err) {
     console.log = origLog; console.warn = origWarn;
     if (analysisId) await db.failAnalysis(analysisId, err.message).catch(() => {});
+    try { fs.unlinkSync(tmpPath); } catch {}
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// ── KP Upload ─────────────────────────────────────────────────────────────────
+
+app.post('/api/analyses/:id/upload-kp', uploadKP.single('file'), async (req, res) => {
+  if (!req.file)
+    return res.status(400).json({ error: 'Файл не передан (.pdf, .xlsx или .xls)' });
+
+  const tmpPath  = req.file.path;
+  const origName = Buffer.from(req.file.originalname, 'latin1').toString('utf8');
+
+  try {
+    const kpItems = await parseKP(tmpPath, origName);
+    if (!kpItems.length) {
+      fs.unlinkSync(tmpPath);
+      return res.status(422).json({
+        error: 'Не удалось извлечь позиции из КП. ' +
+               'Убедитесь, что файл содержит таблицу с наименованиями и ценами за единицу.',
+      });
+    }
+
+    const result = await applyKP(req.params.id, kpItems, db);
+    fs.unlinkSync(tmpPath);
+    res.json(result);
+  } catch (err) {
     try { fs.unlinkSync(tmpPath); } catch {}
     res.status(500).json({ error: err.message });
   }

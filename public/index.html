@@ -508,6 +508,65 @@ function renderAnalyses(list) {
         }
         filesEl.appendChild(btn);
       });
+
+      // ── Кнопка «Загрузить КП» ──────────────────────────────────────────
+      const kpDivider = document.createElement('div');
+      kpDivider.className = 'kp-divider';
+      filesEl.appendChild(kpDivider);
+
+      const kpInput = document.createElement('input');
+      kpInput.type    = 'file';
+      kpInput.accept  = '.pdf,.xlsx,.xls';
+      kpInput.style.display = 'none';
+      filesEl.appendChild(kpInput);
+
+      const kpBtn = document.createElement('a');
+      kpBtn.className = 'dl-chip amber';
+      kpBtn.href      = '#';
+      kpBtn.innerHTML = '<i class="bi bi-cloud-arrow-up"></i> Загрузить КП';
+      kpBtn.title     = 'Загрузить коммерческое предложение для сопоставления цен (PDF, XLSX, XLS)';
+      filesEl.appendChild(kpBtn);
+
+      const kpResult = document.createElement('div');
+      kpResult.className = 'kp-result';
+      filesEl.appendChild(kpResult);
+
+      kpBtn.onclick = e => { e.preventDefault(); kpInput.click(); };
+
+      kpInput.onchange = async () => {
+        const file = kpInput.files[0];
+        if (!file) return;
+
+        kpBtn.classList.add('loading');
+        kpBtn.innerHTML = '<i class="bi bi-arrow-repeat"></i> Обработка…';
+        kpResult.textContent = '';
+        kpResult.className   = 'kp-result';
+
+        const fd = new FormData();
+        fd.append('file', file);
+
+        try {
+          const resp = await fetch(`/api/analyses/${a.id}/upload-kp`, { method: 'POST', body: fd });
+          const data = await resp.json();
+          if (!resp.ok) throw new Error(data.error || `HTTP ${resp.status}`);
+
+          if (data.matched > 0) {
+            kpResult.textContent = `Обновлено ${data.matched} из ${data.total} позиций`;
+            kpResult.classList.add('kp-result-ok');
+            showToast(`КП загружено — обновлено ${data.matched} из ${data.total} позиций`);
+          } else {
+            kpResult.textContent = `Совпадений не найдено (КП: ${data.total} позиций)`;
+            kpResult.classList.add('kp-result-warn');
+            showToast('Совпадений с позициями сметы не найдено');
+          }
+        } catch (err) {
+          showToast('Ошибка КП: ' + err.message);
+        } finally {
+          kpBtn.classList.remove('loading');
+          kpBtn.innerHTML = '<i class="bi bi-cloud-arrow-up"></i> Загрузить КП';
+          kpInput.value   = '';
+        }
+      };
     } else if (a.status === 'error') {
       statusEl.innerHTML = '<span class="badge badge-red"><i class="bi bi-exclamation-triangle"></i> Ошибка</span>';
       card.querySelector('.analysis-stats').style.display = 'none';
