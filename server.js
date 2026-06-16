@@ -122,7 +122,12 @@ app.post('/api/projects/:id/analyze', upload.single('file'), async (req, res) =>
 
 // ── KP Upload ─────────────────────────────────────────────────────────────────
 
-app.post('/api/analyses/:id/upload-kp', uploadKP.single('file'), async (req, res) => {
+app.post('/api/analyses/:id/upload-kp', (req, res, next) => {
+  uploadKP.single('file')(req, res, err => {
+    if (err) return res.status(400).json({ error: err.message });
+    next();
+  });
+}, async (req, res) => {
   if (!req.file)
     return res.status(400).json({ error: 'Файл не передан (.pdf, .xlsx или .xls)' });
 
