@@ -4,8 +4,8 @@
   "description": "Веб-приложение для анализа удорожания материалов по Excel-файлу",
   "main": "server.js",
   "scripts": {
-    "start": "node server.js",
-    "analyze": "node analyze.js"
+    "start": "node --use-system-ca server.js",
+    "analyze": "node --use-system-ca analyze.js"
   },
   "keywords": [
     "excel",
