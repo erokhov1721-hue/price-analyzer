@@ -1,0 +1,20 @@
+{
+  "name": "price-analyzer",
+  "version": "1.0.0",
+  "description": "Веб-приложение для анализа удорожания материалов по Excel-файлу",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "analyze": "node analyze.js"
+  },
+  "keywords": ["excel", "price-analysis", "materials"],
+  "author": "DmitriyErokhov",
+  "license": "ISC",
+  "type": "commonjs",
+  "dependencies": {
+    "exceljs": "^4.4.0",
+    "express": "^5.2.1",
+    "multer": "^2.2.0",
+    "xlsx": "^0.18.5"
+  }
+}
