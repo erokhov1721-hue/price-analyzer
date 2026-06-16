@@ -68,6 +68,12 @@ function fillCell(cell, argb) {
   cell.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb } };
 }
 
+const MR_BORDER_COLOR = 'FF375623';
+function borderCell(cell) {
+  const side = { style: 'thin', color: { argb: MR_BORDER_COLOR } };
+  cell.border = { top: side, left: side, bottom: side, right: side };
+}
+
 function detectSection(classification, name) {
   for (const src of [classification, name]) {
     if (!src) continue;
@@ -116,24 +122,50 @@ function findHeaderRow(sheet) {
   return null;
 }
 
-/** Возвращает массив ценовых столбцов [{colNum, year}], отсортированных по году */
-function detectPriceCols(headers) {
+/** Возвращает массив ценовых столбцов [{colNum, year}], отсортированных по году.
+ *  @param {number} [maxCol=Infinity] — столбцы >= maxCol игнорируются (защита от re-analysis) */
+function detectPriceCols(headers, maxCol = Infinity) {
   const pattern = /цена за единицу материала\s+(\d{4})/i;
   const found = [];
   headers.forEach((h, i) => {
     if (!h) return;
+    const colNum = i + 1;
+    if (colNum >= maxCol) return;
     const m = h.toString().match(pattern);
-    if (m) found.push({ colNum: i + 1, year: parseInt(m[1]), header: h.toString() });
+    if (m) found.push({ colNum, year: parseInt(m[1]), header: h.toString() });
   });
   found.sort((a, b) => a.year - b.year);
   return found;
 }
 
-/** Номер последнего непустого столбца в строке headerRowNum */
-function findLastFilledCol(sheet, headerRowNum) {
+/** Если лист уже содержит блок «Анализ MR Group», возвращает номер его первого столбца,
+ *  иначе — null. Используется для защиты от повторного анализа. */
+function findExistingMRBlock(sheet, headerRowNum) {
+  if (headerRowNum > 1) {
+    let found = null;
+    sheet.getRow(headerRowNum - 1).eachCell({ includeEmpty: false }, (cell, col) => {
+      if (!found && cell.value && cell.value.toString().includes('Анализ MR Group')) {
+        found = col;
+      }
+    });
+    if (found) return found;
+  }
+  // Также проверим строку заголовков
+  let found = null;
+  sheet.getRow(headerRowNum).eachCell({ includeEmpty: false }, (cell, col) => {
+    if (!found && cell.value && cell.value.toString().includes('Цена за единицу материала 2025')) {
+      found = col;
+    }
+  });
+  return found;
+}
+
+/** Номер последнего непустого столбца в строке headerRowNum.
+ *  @param {number} [maxCol=Infinity] — столбцы >= maxCol игнорируются */
+function findLastFilledCol(sheet, headerRowNum, maxCol = Infinity) {
   let last = 0;
   sheet.getRow(headerRowNum).eachCell({ includeEmpty: false }, (_, col) => {
-    if (col > last) last = col;
+    if (col > last && col < maxCol) last = col;
   });
   // Доп. попытка через диапазоны объединений (защита от merged slave-ячеек)
   try {
@@ -143,7 +175,7 @@ function findLastFilledCol(sheet, headerRowNum) {
         const top    = typeof m === 'object' ? (m.top    || m.model?.top)    : null;
         const bottom = typeof m === 'object' ? (m.bottom || m.model?.bottom) : null;
         const right  = typeof m === 'object' ? (m.right  || m.model?.right)  : null;
-        if (top <= headerRowNum && bottom >= headerRowNum && right > last) last = right;
+        if (top <= headerRowNum && bottom >= headerRowNum && right > last && right < maxCol) last = right;
       });
     }
   } catch {}
@@ -179,8 +211,16 @@ async function processSheet(sheet) {
 
   const { rowNum: headerRowNum, headers } = headerInfo;
 
-  // 2. Определить ценовые столбцы (было / стало)
-  const priceCols = detectPriceCols(headers);
+  // 2. Защита от повторного анализа: пропустить уже существующий MR-блок
+  const existingMRCol = findExistingMRBlock(sheet, headerRowNum);
+  if (existingMRCol) {
+    console.warn(`  Лист "${sheet.name}": блок «Анализ MR Group» уже присутствует (кол.${existingMRCol}) — пересчёт`);
+  }
+
+  // Ограничиваем поиск столбцами левее существующего MR-блока (если он есть)
+  const colLimit = existingMRCol ?? Infinity;
+
+  const priceCols = detectPriceCols(headers, colLimit);
   if (priceCols.length < 2) throw new Error('найдено менее двух ценовых столбцов');
 
   const wasCol    = priceCols[0];                        // самый ранний год
@@ -203,8 +243,8 @@ async function processSheet(sheet) {
   console.log(`  Было: кол.${wasCol.colNum} [${wasCol.year}]  Стало: кол.${becameCol.colNum} [${becameCol.year}]`);
   console.log(`  Кол-во ориентир: кол.${qtyOrientirCol || '—'}  (fallback кол-во: кол.${qtyCol || '—'})`);
 
-  // 4. Позиции нового MR-блока — правее последней заполненной колонки
-  const lastFilledCol = findLastFilledCol(sheet, headerRowNum);
+  // 4. Позиции нового MR-блока — правее последней заполненной колонки (левее любого старого MR-блока)
+  const lastFilledCol = findLastFilledCol(sheet, headerRowNum, colLimit);
   const mrPriceColIdx = lastFilledCol + 1;
   const mrSumColIdx   = lastFilledCol + 2;
 
@@ -226,6 +266,7 @@ async function processSheet(sheet) {
     groupCell.font      = { bold: true, color: { argb: MR_FONT } };
     groupCell.alignment = { horizontal: 'center', vertical: 'middle', wrapText: true };
     fillCell(groupCell, MR_HEADER);
+    borderCell(groupCell);
   }
 
   // 5b. Подзаголовки в строке заголовков
@@ -233,15 +274,17 @@ async function processSheet(sheet) {
 
   const priceHdr  = hRow.getCell(mrPriceColIdx);
   priceHdr.value     = 'Цена за единицу материала 2025';
-  priceHdr.font      = { bold: true };
+  priceHdr.font      = { bold: true, color: { argb: MR_FONT } };
   priceHdr.alignment = { horizontal: 'center', vertical: 'middle', wrapText: true };
   fillCell(priceHdr, MR_HEADER);
+  borderCell(priceHdr);
 
   const sumHdr    = hRow.getCell(mrSumColIdx);
   sumHdr.value     = 'Сумма материалов 2025';
-  sumHdr.font      = { bold: true };
+  sumHdr.font      = { bold: true, color: { argb: MR_FONT } };
   sumHdr.alignment = { horizontal: 'center', vertical: 'middle', wrapText: true };
   fillCell(sumHdr, MR_HEADER);
+  borderCell(sumHdr);
 
   // Ширина новых столбцов
   sheet.getColumn(mrPriceColIdx).width = 22;
