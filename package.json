@@ -7,11 +7,17 @@
     "start": "node server.js",
     "analyze": "node analyze.js"
   },
-  "keywords": ["excel", "price-analysis", "materials"],
+  "keywords": [
+    "excel",
+    "price-analysis",
+    "materials"
+  ],
   "author": "DmitriyErokhov",
   "license": "ISC",
   "type": "commonjs",
   "dependencies": {
+    "@supabase/supabase-js": "^2.108.2",
+    "dotenv": "^17.4.2",
     "exceljs": "^4.4.0",
     "express": "^5.2.1",
     "multer": "^2.2.0",

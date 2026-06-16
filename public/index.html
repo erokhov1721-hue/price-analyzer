@@ -1,0 +1,425 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Price Analyzer — MR Group</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=DM+Sans:opsz,wght@9..40,400;9..40,500;9..40,600;9..40,700&display=swap">
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons@1.11.3/font/bootstrap-icons.css">
+  <link rel="stylesheet" href="/styles.css">
+</head>
+<body>
+<div class="app-layout">
+
+  <!-- ════════════════ SIDEBAR ════════════════ -->
+  <aside class="sidebar">
+
+    <div class="sidebar-logo">
+      <div class="logo-icon"><i class="bi bi-graph-up-arrow"></i></div>
+      <div class="logo-text">
+        <h1>Price Analyzer</h1>
+        <p>MR Group</p>
+      </div>
+    </div>
+
+    <!-- Новый проект -->
+    <div class="new-project-form">
+      <input type="text" id="newProjectName" placeholder="Название проекта" maxlength="80">
+      <input type="text" id="newProjectDesc" placeholder="Описание (опционально)" maxlength="200">
+      <button id="btnCreateProject"><i class="bi bi-plus-lg"></i> Создать проект</button>
+    </div>
+
+    <!-- Список проектов -->
+    <div class="projects-list">
+      <div class="projects-list-title">Проекты</div>
+      <div id="projectsList">
+        <div class="sidebar-empty">Проектов пока нет</div>
+      </div>
+    </div>
+
+  </aside>
+
+  <!-- ════════════════ MAIN ════════════════ -->
+  <main class="main-content">
+
+    <!-- Заглушка — нет выбранного проекта -->
+    <div class="empty-state" id="emptyState">
+      <div class="empty-icon"><i class="bi bi-folder2-open"></i></div>
+      <h2>Выберите проект</h2>
+      <p>Выберите проект из списка слева или создайте новый</p>
+    </div>
+
+    <!-- Вид проекта -->
+    <div class="project-view" id="projectView" style="display:none">
+
+      <!-- Шапка проекта -->
+      <div class="project-header">
+        <div class="project-header-left">
+          <div class="project-title" id="viewProjectName">—</div>
+          <div class="project-desc"  id="viewProjectDesc"></div>
+        </div>
+        <button class="btn-delete-project" id="btnDeleteProject" title="Удалить проект">
+          <i class="bi bi-trash3"></i>
+        </button>
+      </div>
+
+      <!-- Загрузка файла -->
+      <div class="card upload-card">
+        <div class="card-section">
+          <div class="section-label">Новый анализ</div>
+          <div class="drop-zone" id="dropZone">
+            <input type="file" id="fileInput" accept=".xlsx">
+            <div class="drop-icon"><i class="bi bi-cloud-upload"></i></div>
+            <h3>Перетащите .xlsx файл сюда</h3>
+            <p>или <a id="chooseLink">выберите файл</a> на компьютере</p>
+          </div>
+          <div class="file-pill" id="filePill">
+            <i class="bi bi-file-earmark-spreadsheet"></i>
+            <span class="fname" id="fName"></span>
+            <span class="remove" id="removeFile"><i class="bi bi-x"></i></span>
+          </div>
+        </div>
+        <div class="card-section">
+          <button class="btn-primary" id="btnAnalyze" disabled>
+            <i class="bi bi-play-fill"></i>&nbsp; Запустить анализ
+          </button>
+        </div>
+
+        <!-- Прогресс -->
+        <div class="progress-section" id="progressSection">
+          <div class="progress-header">
+            <span id="progressLabel">Читаем файл…</span>
+            <span class="progress-pct" id="progressPct">0%</span>
+          </div>
+          <div class="progress-track">
+            <div class="progress-fill" id="progressFill"></div>
+          </div>
+        </div>
+
+        <div class="error-box" id="errorBox"></div>
+      </div>
+
+      <!-- История -->
+      <div class="history-header">
+        <span>История запусков</span>
+        <span class="history-count" id="historyCount"></span>
+      </div>
+
+      <div id="analysesList">
+        <div class="history-empty">Запусков пока нет — загрузите первый файл</div>
+      </div>
+
+    </div>
+  </main>
+</div>
+
+<!-- ═══════════ Шаблон карточки анализа ═══════════ -->
+<template id="tplAnalysis">
+  <div class="analysis-card">
+    <div class="analysis-header">
+      <div class="analysis-meta">
+        <span class="analysis-filename"></span>
+        <span class="analysis-date"></span>
+      </div>
+      <div class="analysis-status"></div>
+    </div>
+    <div class="analysis-stats">
+      <div class="astat-box">
+        <div class="astat-num total"></div>
+        <div class="astat-lbl">обработано</div>
+      </div>
+      <div class="astat-box">
+        <div class="astat-num auto"></div>
+        <div class="astat-lbl">авто</div>
+      </div>
+      <div class="astat-box">
+        <div class="astat-num req"></div>
+        <div class="astat-lbl">на запрос</div>
+      </div>
+    </div>
+    <div class="analysis-files"></div>
+  </div>
+</template>
+
+<script>
+// ═══════════════════════════════════════════════════════
+//  STATE
+// ═══════════════════════════════════════════════════════
+let currentProjectId = null;
+let selectedFile     = null;
+
+// ═══════════════════════════════════════════════════════
+//  API helpers
+// ═══════════════════════════════════════════════════════
+const api = {
+  async get(url)           { const r = await fetch(url);                   return r.json(); },
+  async post(url, body)    { const r = await fetch(url, { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(body) }); return r.json(); },
+  async del(url)           { const r = await fetch(url, { method:'DELETE' }); return r.json(); },
+  async postForm(url, fd)  { const r = await fetch(url, { method:'POST', body: fd }); return r.json(); },
+};
+
+// ═══════════════════════════════════════════════════════
+//  PROJECTS
+// ═══════════════════════════════════════════════════════
+async function loadProjects() {
+  const projects = await api.get('/api/projects');
+  renderProjects(projects);
+}
+
+function renderProjects(projects) {
+  const list = document.getElementById('projectsList');
+  if (!projects.length) {
+    list.innerHTML = '<div class="sidebar-empty">Проектов пока нет</div>';
+    return;
+  }
+  list.innerHTML = projects.map(p => `
+    <div class="project-card ${p.id === currentProjectId ? 'active' : ''}"
+         data-id="${p.id}" data-name="${esc(p.name)}" data-desc="${esc(p.description||'')}">
+      <div class="project-card-header">
+        <span class="project-name">${esc(p.name)}</span>
+      </div>
+      ${p.description ? `<div class="project-stats">${esc(p.description)}</div>` : ''}
+      <div class="project-dates">${fmtDate(p.created_at)}</div>
+    </div>
+  `).join('');
+
+  list.querySelectorAll('.project-card').forEach(card => {
+    card.onclick = () => openProject(card.dataset.id, card.dataset.name, card.dataset.desc);
+  });
+}
+
+async function openProject(id, name, desc) {
+  currentProjectId = id;
+  document.getElementById('emptyState').style.display   = 'none';
+  document.getElementById('projectView').style.display  = 'block';
+  document.getElementById('viewProjectName').textContent = name;
+  document.getElementById('viewProjectDesc').textContent = desc || '';
+
+  // Активный стиль в сайдбаре
+  document.querySelectorAll('.project-card').forEach(c =>
+    c.classList.toggle('active', c.dataset.id === id)
+  );
+
+  resetUpload();
+  await loadAnalyses(id);
+}
+
+document.getElementById('btnCreateProject').onclick = async () => {
+  const name = document.getElementById('newProjectName').value.trim();
+  if (!name) return;
+  const p = await api.post('/api/projects', {
+    name,
+    description: document.getElementById('newProjectDesc').value.trim(),
+  });
+  document.getElementById('newProjectName').value = '';
+  document.getElementById('newProjectDesc').value = '';
+  await loadProjects();
+  openProject(p.id, p.name, p.description || '');
+};
+
+document.getElementById('btnDeleteProject').onclick = async () => {
+  if (!currentProjectId) return;
+  const name = document.getElementById('viewProjectName').textContent;
+  if (!confirm(`Удалить проект «${name}» и все его данные?`)) return;
+  await api.del(`/api/projects/${currentProjectId}`);
+  currentProjectId = null;
+  document.getElementById('emptyState').style.display  = 'block';
+  document.getElementById('projectView').style.display = 'none';
+  await loadProjects();
+};
+
+// ═══════════════════════════════════════════════════════
+//  UPLOAD
+// ═══════════════════════════════════════════════════════
+const dropZone   = document.getElementById('dropZone');
+const fileInput  = document.getElementById('fileInput');
+const filePill   = document.getElementById('filePill');
+const fName      = document.getElementById('fName');
+const btnAnalyze = document.getElementById('btnAnalyze');
+
+document.getElementById('chooseLink').onclick = e => { e.stopPropagation(); fileInput.click(); };
+dropZone.onclick = () => fileInput.click();
+
+dropZone.addEventListener('dragover',  e => { e.preventDefault(); dropZone.classList.add('drag'); });
+dropZone.addEventListener('dragleave', () => dropZone.classList.remove('drag'));
+dropZone.addEventListener('drop', e => {
+  e.preventDefault(); dropZone.classList.remove('drag');
+  const f = e.dataTransfer.files[0];
+  if (f && f.name.endsWith('.xlsx')) setFile(f);
+});
+fileInput.onchange = () => { if (fileInput.files[0]) setFile(fileInput.files[0]); };
+
+document.getElementById('removeFile').onclick = e => {
+  e.stopPropagation(); resetUpload();
+};
+
+function setFile(f) {
+  selectedFile = f;
+  fName.textContent = f.name;
+  filePill.style.display = 'flex';
+  btnAnalyze.disabled = false;
+  document.getElementById('errorBox').style.display = 'none';
+}
+
+function resetUpload() {
+  selectedFile = null;
+  fileInput.value = '';
+  filePill.style.display = 'none';
+  btnAnalyze.disabled = true;
+  document.getElementById('progressSection').style.display = 'none';
+  document.getElementById('errorBox').style.display = 'none';
+}
+
+// ── Progress ──────────────────────────────────────────
+let pTimer = null;
+const STAGES = [
+  [0,  12, 700,  'Читаем файл…'],
+  [12, 35, 1100, 'Определяем столбцы…'],
+  [35, 72, 2400, 'Анализируем строки…'],
+  [72, 88, 1400, 'Загружаем в Supabase…'],
+];
+function startProgress() {
+  const fill = document.getElementById('progressFill');
+  const lbl  = document.getElementById('progressLabel');
+  const pct  = document.getElementById('progressPct');
+  fill.style.width = '0%'; pct.textContent = '0%'; let i = 0;
+  const run = () => {
+    if (i >= STAGES.length) return;
+    const [, to, dur, text] = STAGES[i++];
+    lbl.textContent = text;
+    fill.style.transition = `width ${dur}ms ease`;
+    fill.style.width = to + '%'; pct.textContent = to + '%';
+    pTimer = setTimeout(run, dur + 80);
+  };
+  run();
+}
+function stopProgress() {
+  clearTimeout(pTimer);
+  const fill = document.getElementById('progressFill');
+  fill.style.transition = 'width .3s ease';
+  fill.style.width = '100%';
+  document.getElementById('progressPct').textContent = '100%';
+}
+
+// ── Run analysis ──────────────────────────────────────
+btnAnalyze.onclick = async () => {
+  if (!selectedFile || !currentProjectId) return;
+  btnAnalyze.disabled = true;
+  document.getElementById('errorBox').style.display = 'none';
+  document.getElementById('progressSection').style.display = 'block';
+  startProgress();
+
+  const fd = new FormData();
+  fd.append('file', selectedFile);
+
+  try {
+    const data = await api.postForm(`/api/projects/${currentProjectId}/analyze`, fd);
+    stopProgress();
+    await new Promise(r => setTimeout(r, 350));
+    document.getElementById('progressSection').style.display = 'none';
+
+    if (data.error) throw new Error(data.error);
+
+    resetUpload();
+    await loadAnalyses(currentProjectId);
+  } catch (err) {
+    stopProgress();
+    document.getElementById('progressSection').style.display = 'none';
+    const box = document.getElementById('errorBox');
+    box.textContent = '⚠️ ' + err.message;
+    box.style.display = 'block';
+    btnAnalyze.disabled = false;
+  }
+};
+
+// ═══════════════════════════════════════════════════════
+//  ANALYSES
+// ═══════════════════════════════════════════════════════
+async function loadAnalyses(projectId) {
+  const analyses = await api.get(`/api/projects/${projectId}/analyses`);
+  renderAnalyses(analyses);
+}
+
+function renderAnalyses(list) {
+  const container = document.getElementById('analysesList');
+  const counter   = document.getElementById('historyCount');
+  const completed = list.filter(a => a.status === 'completed');
+
+  counter.textContent = list.length ? `${list.length} запуск${plural(list.length)}` : '';
+
+  if (!list.length) {
+    container.innerHTML = '<div class="history-empty">Запусков пока нет — загрузите первый файл</div>';
+    return;
+  }
+
+  container.innerHTML = '';
+  list.forEach(a => {
+    const tpl  = document.getElementById('tplAnalysis').content.cloneNode(true);
+    const card = tpl.querySelector('.analysis-card');
+
+    card.querySelector('.analysis-filename').textContent = a.filename;
+    card.querySelector('.analysis-date').textContent     = fmtDateTime(a.created_at);
+
+    const statusEl = card.querySelector('.analysis-status');
+    if (a.status === 'completed') {
+      statusEl.innerHTML = '<span class="badge badge-green"><i class="bi bi-check-lg"></i> Готово</span>';
+      card.querySelector('.astat-num.total').textContent = (a.stats_total   || 0).toLocaleString('ru');
+      card.querySelector('.astat-num.auto').textContent  = (a.stats_auto    || 0).toLocaleString('ru');
+      card.querySelector('.astat-num.req').textContent   = (a.stats_request || 0).toLocaleString('ru');
+
+      // Кнопки скачивания
+      const filesEl = card.querySelector('.analysis-files');
+      const fileMap  = { source: ['Исходный', 'bi-file-earmark-spreadsheet', ''],
+                         analysis: ['Анализ', 'bi-table', 'blue'],
+                         request:  ['Запрос', 'bi-file-earmark-text', 'green'] };
+      (a.files || []).forEach(f => {
+        const [label, icon, cls] = fileMap[f.file_type] || ['Файл', 'bi-file', ''];
+        const btn = document.createElement('a');
+        btn.href      = `/api/files/${f.id}/download`;
+        btn.className = `dl-chip ${cls}`;
+        btn.innerHTML = `<i class="bi ${icon}"></i> ${label}`;
+        filesEl.appendChild(btn);
+      });
+    } else if (a.status === 'error') {
+      statusEl.innerHTML = '<span class="badge badge-red"><i class="bi bi-exclamation-triangle"></i> Ошибка</span>';
+      card.querySelector('.analysis-stats').style.display = 'none';
+      if (a.error_message) {
+        const err = document.createElement('div');
+        err.className = 'analysis-error-msg';
+        err.textContent = a.error_message;
+        card.querySelector('.analysis-files').appendChild(err);
+      }
+    } else {
+      statusEl.innerHTML = '<span class="badge badge-gray"><i class="bi bi-hourglass-split"></i> В процессе</span>';
+      card.querySelector('.analysis-stats').style.display = 'none';
+    }
+
+    container.appendChild(tpl);
+  });
+}
+
+// ═══════════════════════════════════════════════════════
+//  UTILS
+// ═══════════════════════════════════════════════════════
+function esc(str) {
+  return String(str).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+}
+function fmtDate(iso) {
+  return new Date(iso).toLocaleDateString('ru', { day:'2-digit', month:'short', year:'numeric' });
+}
+function fmtDateTime(iso) {
+  return new Date(iso).toLocaleString('ru', { day:'2-digit', month:'short', year:'numeric', hour:'2-digit', minute:'2-digit' });
+}
+function plural(n) {
+  if (n % 10 === 1 && n % 100 !== 11) return '';
+  if ([2,3,4].includes(n % 10) && ![12,13,14].includes(n % 100)) return 'а';
+  return 'ов';
+}
+
+// ── Init ──────────────────────────────────────────────
+loadProjects();
+</script>
+</body>
+</html>
