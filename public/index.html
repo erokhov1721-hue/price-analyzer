@@ -155,7 +155,8 @@ let selectedFile     = null;
 // ═══════════════════════════════════════════════════════
 const api = {
   async get(url)           { const r = await fetch(url);                   return r.json(); },
-  async post(url, body)    { const r = await fetch(url, { method:'POST', headers:{'Content-Type':'application/json'}, body: JSON.stringify(body) }); return r.json(); },
+  async post(url, body)    { const r = await fetch(url, { method:'POST',  headers:{'Content-Type':'application/json'}, body: JSON.stringify(body) }); return r.json(); },
+  async patch(url, body)   { const r = await fetch(url, { method:'PATCH', headers:{'Content-Type':'application/json'}, body: JSON.stringify(body) }); return r.json(); },
   async del(url)           { const r = await fetch(url, { method:'DELETE' }); return r.json(); },
   async postForm(url, fd)  { const r = await fetch(url, { method:'POST', body: fd }); return r.json(); },
 };
@@ -179,6 +180,9 @@ function renderProjects(projects) {
          data-id="${p.id}" data-name="${esc(p.name)}" data-desc="${esc(p.description||'')}">
       <div class="project-card-header">
         <span class="project-name">${esc(p.name)}</span>
+        <button class="btn-edit-project" data-id="${p.id}" title="Редактировать">
+          <i class="bi bi-pencil"></i>
+        </button>
       </div>
       ${p.description ? `<div class="project-stats">${esc(p.description)}</div>` : ''}
       <div class="project-dates">${fmtDate(p.created_at)}</div>
@@ -186,8 +190,119 @@ function renderProjects(projects) {
   `).join('');
 
   list.querySelectorAll('.project-card').forEach(card => {
-    card.onclick = () => openProject(card.dataset.id, card.dataset.name, card.dataset.desc);
+    card.onclick = e => {
+      if (e.target.closest('.btn-edit-project')) return;
+      openProject(card.dataset.id, card.dataset.name, card.dataset.desc);
+    };
   });
+
+  list.querySelectorAll('.btn-edit-project').forEach(btn => {
+    btn.onclick = e => {
+      e.stopPropagation();
+      const card = btn.closest('.project-card');
+      startEditProject(card.dataset.id, card.dataset.name, card.dataset.desc || '');
+    };
+  });
+}
+
+function startEditProject(id, currentName, currentDesc) {
+  const card = document.querySelector(`.project-card[data-id="${id}"]`);
+  if (!card) return;
+
+  const nameEl  = card.querySelector('.project-name');
+  const descEl  = card.querySelector('.project-stats');
+  const datesEl = card.querySelector('.project-dates');
+  const editBtn = card.querySelector('.btn-edit-project');
+
+  // Name input
+  const nameInput = document.createElement('input');
+  nameInput.type = 'text';
+  nameInput.className = 'project-edit-input';
+  nameInput.value = currentName;
+  nameInput.maxLength = 80;
+
+  // Description input
+  const descInput = document.createElement('input');
+  descInput.type = 'text';
+  descInput.className = 'project-edit-input';
+  descInput.value = currentDesc;
+  descInput.maxLength = 200;
+  descInput.placeholder = 'Описание (опционально)';
+  descInput.style.marginTop = '6px';
+  descInput.style.fontSize = '12px';
+  descInput.style.fontWeight = '400';
+  descInput.style.opacity = '0.8';
+
+  // Swap elements
+  nameEl.replaceWith(nameInput);
+  if (descEl) {
+    descEl.replaceWith(descInput);
+  } else {
+    datesEl.before(descInput);
+  }
+  editBtn.style.display = 'none';
+
+  card.style.pointerEvents = 'none';
+  nameInput.style.pointerEvents = 'auto';
+  descInput.style.pointerEvents = 'auto';
+
+  nameInput.focus();
+  nameInput.select();
+
+  let saving = false;
+
+  async function save() {
+    if (saving) return;
+    const newName = nameInput.value.trim();
+    const newDesc = descInput.value.trim();
+    if (!newName) { cancel(); return; }
+    if (newName === currentName && newDesc === currentDesc) { cancel(); return; }
+    saving = true;
+    try {
+      const updated = await api.patch(`/api/projects/${id}`, { name: newName, description: newDesc || null });
+      card.dataset.name = updated.name;
+      card.dataset.desc = updated.description || '';
+      await loadProjects();
+      if (currentProjectId === id) {
+        document.getElementById('viewProjectName').textContent = updated.name;
+        document.getElementById('viewProjectDesc').textContent = updated.description || '';
+      }
+    } catch (err) {
+      cancel();
+    }
+  }
+
+  function cancel() {
+    // Restore name
+    const span = document.createElement('span');
+    span.className = 'project-name';
+    span.textContent = currentName;
+    nameInput.replaceWith(span);
+    // Restore desc
+    if (currentDesc) {
+      const d = document.createElement('div');
+      d.className = 'project-stats';
+      d.textContent = currentDesc;
+      descInput.replaceWith(d);
+    } else {
+      descInput.remove();
+    }
+    editBtn.style.display = '';
+    card.style.pointerEvents = '';
+  }
+
+  // Save on blur of either field — delay so focus can move between the two inputs
+  nameInput.onblur = () => setTimeout(() => { if (!card.contains(document.activeElement)) save(); }, 150);
+  descInput.onblur = () => setTimeout(() => { if (!card.contains(document.activeElement)) save(); }, 150);
+
+  nameInput.onkeydown = e => {
+    if (e.key === 'Enter')  { e.preventDefault(); descInput.focus(); descInput.select(); }
+    if (e.key === 'Escape') { e.preventDefault(); nameInput.onblur = null; descInput.onblur = null; cancel(); }
+  };
+  descInput.onkeydown = e => {
+    if (e.key === 'Enter')  { e.preventDefault(); descInput.blur(); }
+    if (e.key === 'Escape') { e.preventDefault(); nameInput.onblur = null; descInput.onblur = null; cancel(); }
+  };
 }
 
 async function openProject(id, name, desc) {
@@ -371,15 +486,26 @@ function renderAnalyses(list) {
 
       // Кнопки скачивания
       const filesEl = card.querySelector('.analysis-files');
-      const fileMap  = { source: ['Исходный', 'bi-file-earmark-spreadsheet', ''],
-                         analysis: ['Анализ', 'bi-table', 'blue'],
-                         request:  ['Запрос', 'bi-file-earmark-text', 'green'] };
-      (a.files || []).forEach(f => {
-        const [label, icon, cls] = fileMap[f.file_type] || ['Файл', 'bi-file', ''];
+      const FILE_TYPES = [
+        { type: 'source',   label: 'Исходный', icon: 'bi-file-earmark-spreadsheet', cls: '' },
+        { type: 'analysis', label: 'Анализ',   icon: 'bi-table',                    cls: 'blue' },
+        { type: 'request',  label: 'Запрос',   icon: 'bi-file-earmark-text',        cls: 'green' },
+      ];
+      const fileById = {};
+      (a.files || []).forEach(f => { fileById[f.file_type] = f; });
+
+      FILE_TYPES.forEach(({ type, label, icon, cls }) => {
+        const f   = fileById[type];
         const btn = document.createElement('a');
-        btn.href      = `/api/files/${f.id}/download`;
-        btn.className = `dl-chip ${cls}`;
+        btn.className = `dl-chip ${cls}${f ? '' : ' disabled'}`;
         btn.innerHTML = `<i class="bi ${icon}"></i> ${label}`;
+        if (f) {
+          btn.href    = '#';
+          btn.title   = label;
+          btn.onclick = e => { e.preventDefault(); downloadFile(f.id, btn); };
+        } else {
+          btn.title = 'Файл недоступен';
+        }
         filesEl.appendChild(btn);
       });
     } else if (a.status === 'error') {
@@ -416,6 +542,53 @@ function plural(n) {
   if (n % 10 === 1 && n % 100 !== 11) return '';
   if ([2,3,4].includes(n % 10) && ![12,13,14].includes(n % 100)) return 'а';
   return 'ов';
+}
+
+// ═══════════════════════════════════════════════════════
+//  DOWNLOAD
+// ═══════════════════════════════════════════════════════
+async function downloadFile(fileId, chipEl) {
+  chipEl.classList.add('loading');
+  try {
+    const resp = await fetch(`/api/files/${fileId}/download`);
+    if (!resp.ok) {
+      const body = await resp.json().catch(() => ({ error: 'Неизвестная ошибка' }));
+      throw new Error(body.error || `HTTP ${resp.status}`);
+    }
+
+    const blob = await resp.blob();
+
+    // Извлекаем имя файла из заголовка Content-Disposition
+    const cd = resp.headers.get('content-disposition') || '';
+    const m  = cd.match(/filename\*=UTF-8''([^;]+)/i) || cd.match(/filename="([^"]+)"/i);
+    const filename = m ? decodeURIComponent(m[1]) : 'file.xlsx';
+
+    const url = URL.createObjectURL(blob);
+    const a   = document.createElement('a');
+    a.href     = url;
+    a.download = filename;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+  } catch (err) {
+    showToast('Ошибка скачивания: ' + err.message);
+  } finally {
+    chipEl.classList.remove('loading');
+  }
+}
+
+function showToast(msg) {
+  const t = document.createElement('div');
+  t.className = 'toast';
+  t.textContent = msg;
+  document.body.appendChild(t);
+  t.getBoundingClientRect(); // force reflow
+  t.classList.add('toast-show');
+  setTimeout(() => {
+    t.classList.remove('toast-show');
+    t.addEventListener('transitionend', () => t.remove(), { once: true });
+  }, 3500);
 }
 
 // ── Init ──────────────────────────────────────────────

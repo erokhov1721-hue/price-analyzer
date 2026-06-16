@@ -35,6 +35,18 @@ app.post('/api/projects', async (req, res) => {
   catch (e) { res.status(500).json({ error: e.message }); }
 });
 
+app.patch('/api/projects/:id', async (req, res) => {
+  const { name, description } = req.body;
+  if (name !== undefined && !name?.trim()) return res.status(400).json({ error: 'Название не может быть пустым' });
+  try {
+    const updates = {};
+    if (name        !== undefined) updates.name        = name.trim();
+    if (description !== undefined) updates.description = description?.trim() || null;
+    res.json(await db.updateProject(req.params.id, updates));
+  }
+  catch (e) { res.status(500).json({ error: e.message }); }
+});
+
 app.delete('/api/projects/:id', async (req, res) => {
   try { await db.deleteProject(req.params.id); res.json({ ok: true }); }
   catch (e) { res.status(500).json({ error: e.message }); }
@@ -102,22 +114,16 @@ app.post('/api/projects/:id/analyze', upload.single('file'), async (req, res) =>
 
 app.get('/api/files/:id/download', async (req, res) => {
   try {
-    const { createClient } = require('@supabase/supabase-js');
-    const supa = createClient(process.env.SUPABASE_URL, process.env.SUPABASE_ANON_KEY);
-    const { data: row } = await supa
-      .from('files')
-      .select('storage_path, file_type, analyses(filename)')
-      .eq('id', req.params.id)
-      .single();
-
+    const row = await db.getFile(req.params.id);
     if (!row) return res.status(404).json({ error: 'Файл не найден' });
 
     const buffer = await db.downloadFile(row.storage_path);
     const suffix = { source: '', analysis: '_analysis', request: '_request' }[row.file_type] || '';
     const base   = path.basename(row.analyses.filename, '.xlsx');
+    const fname  = encodeURIComponent(base + suffix + '.xlsx');
 
     res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
-    res.setHeader('Content-Disposition', `attachment; filename*=UTF-8''${encodeURIComponent(base + suffix + '.xlsx')}`);
+    res.setHeader('Content-Disposition', `attachment; filename*=UTF-8''${fname}`);
     res.send(buffer);
   } catch (e) {
     res.status(500).json({ error: e.message });
