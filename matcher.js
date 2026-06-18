@@ -1,9 +1,28 @@
 'use strict';
 
+// ── Аббревиатуры материалов ───────────────────────────────────────────────────
+
+const ABBR = {
+  вгп:  'водогазопровод',
+  эс:   'электросвар',
+  пнд:  'полиэтилен',
+  пвх:  'поливинилхлорид',
+  ппр:  'полипропилен',
+  нж:   'нержавеющ',
+  гк:   'горячекатан',
+  хк:   'холоднокатан',
+  оц:   'оцинкован',
+};
+
+function expandAbbr(str) {
+  return str.replace(/\b(вгп|эс|пнд|пвх|ппр|нж|гк|хк|оц)\b/gi,
+    m => ABBR[m.toLowerCase()] || m);
+}
+
 // ── Нормализация строки ───────────────────────────────────────────────────────
 
 function normalize(str) {
-  return str
+  return expandAbbr(str)
     .toLowerCase()
     // Символы диаметра → "ду"
     .replace(/[∅øØ]/g, 'ду')
@@ -57,11 +76,77 @@ function trigramSim(a, b) {
   return (2 * common) / (ta.size + tb.size);
 }
 
+// ── Keyword-based matching ────────────────────────────────────────────────────
+
+// Категории: если хотя бы один корень встретился в строке — категория определена
+const CATEGORIES = [
+  ['труб'],
+  ['кабел', 'провод', 'кабель'],
+  ['задвижк'],
+  ['клапан'],
+  ['кран'],
+  ['арматур'],
+  ['насос'],
+  ['фланц', 'фланец'],
+  ['муфт'],
+  ['угол'],       // уголок
+  ['швеллер'],
+  ['двутавр'],
+  ['профил'],
+  ['лист'],
+  ['прокат'],
+  ['бетон'],
+  ['цемент'],
+  ['кирпич'],
+  ['краск', 'грунт'],
+  ['изолят'],
+];
+
+function getCategoryIdx(normStr) {
+  for (let i = 0; i < CATEGORIES.length; i++) {
+    if (CATEGORIES[i].some(stem => normStr.includes(stem))) return i;
+  }
+  return -1;
+}
+
+/**
+ * Размерные параметры строки.
+ * Приоритет: формат NxM (15x2.8, 100x5x3).
+ * Fallback: одиночный диаметр после "ду" (ду15, ду 100).
+ */
+function extractDims(normStr) {
+  const full = (normStr.match(/\d+(?:[.,]\d+)?(?:x\d+(?:[.,]\d+)?)+/g) || [])
+    .map(d => d.replace(',', '.'));
+  if (full.length) return full;
+
+  const m = normStr.match(/\bду\s*(\d+(?:[.,]\d+)?)/);
+  if (m) return [m[1].replace(',', '.')];
+
+  return [];
+}
+
+function keywordSim(normSrc, normKp) {
+  const ci = getCategoryIdx(normSrc);
+  const cj = getCategoryIdx(normKp);
+  if (ci === -1 || cj === -1 || ci !== cj) return 0;
+
+  const dSrc = extractDims(normSrc);
+  const dKp  = extractDims(normKp);
+
+  if (dSrc.length && dKp.length) {
+    return dSrc.some(d => dKp.includes(d)) ? 0.88 : 0.15;
+  }
+  // Одна из строк совсем без размеров — не делаем вывод по ключевым словам
+  return 0;
+}
+
 // ── Итоговое сходство двух наименований ──────────────────────────────────────
 
 function similarity(srcName, kpName) {
   if (!numbersMatch(srcName, kpName)) return 0;
-  return trigramSim(normalize(srcName), normalize(kpName));
+  const nSrc = normalize(srcName);
+  const nKp  = normalize(kpName);
+  return Math.max(trigramSim(nSrc, nKp), keywordSim(nSrc, nKp));
 }
 
 // ── Основная функция сопоставления ───────────────────────────────────────────
@@ -75,20 +160,17 @@ function similarity(srcName, kpName) {
  * @returns {Array<{sourceRowNum, sheetName, sourceName, kpName, kpPrice, score}>}
  */
 function matchItems(kpItems, sourceItems, threshold = 0.62) {
-  const results  = [];
-  const usedKp   = new Set();   // каждая позиция КП используется не более одного раза
+  const results = [];
 
   for (const src of sourceItems) {
-    let bestScore = 0, bestKp = null, bestIdx = -1;
+    let bestScore = 0, bestKp = null;
 
-    kpItems.forEach((kp, idx) => {
-      if (usedKp.has(idx)) return;
+    kpItems.forEach(kp => {
       const s = similarity(src.name, kp.name);
-      if (s > bestScore) { bestScore = s; bestKp = kp; bestIdx = idx; }
+      if (s > bestScore) { bestScore = s; bestKp = kp; }
     });
 
     if (bestKp && bestScore >= threshold) {
-      usedKp.add(bestIdx);
       results.push({
         sourceRowNum: src.rowNum,
         sheetName:    src.sheetName,

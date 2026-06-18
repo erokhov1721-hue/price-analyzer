@@ -59,6 +59,46 @@ async function parseExcelKP(filePath) {
 const RU_NUM_SRC = '\\d{1,3}(?:[\\s\\u00A0]\\d{3})*(?:[.,]\\d{1,2})?';
 const PRICE_EOL  = new RegExp(`(${RU_NUM_SRC})\\s*(?:руб\\.?|₽|rub)?\\s*$`, 'i');
 
+/**
+ * Исправляет случаи, когда pdf-parse склеивает количество и цену без пробела:
+ * "80" (кол-во) + "1 096,80" (цена) → "801 096,80" (неверно распознано как 801 096,80).
+ *
+ * Алгоритм: если цена подозрительно велика по сравнению с медианой всех позиций
+ * КП, пробуем отрезать 1–2 «лишние» цифры с начала первой тысячной группы.
+ * Результат принимается только если:
+ *  - оставшаяся часть начинается с ненулевой цифры (исключает "0 250,00")
+ *  - новая цена меньше исходной минимум в 100 раз
+ */
+function fixConcatenatedPrices(items) {
+  if (items.length < 2) return;
+
+  const sorted = items.map(it => it.price).sort((a, b) => a - b);
+  const median = sorted[Math.floor(sorted.length / 2)];
+
+  for (const item of items) {
+    if (item.price <= 100 * median || !item._raw) continue;
+
+    const parts = item._raw.trim().split(/[\s\u00A0]+/);
+    if (parts.length < 2) continue;
+
+    const firstGroup = parts[0];
+    if (!/^\d{2,3}$/.test(firstGroup)) continue;   // только 2–3-значный первый блок
+
+    for (let n = 1; n < firstGroup.length; n++) {
+      const stripped = firstGroup.slice(n);
+      if (!stripped || stripped[0] === '0') continue;   // не должна начинаться с 0
+
+      const altStr   = stripped + ' ' + parts.slice(1).join(' ');
+      const altPrice = parseFloat(altStr.replace(/[\s\u00A0]/g, '').replace(',', '.'));
+
+      if (altPrice > 0 && altPrice * 100 < item.price) {
+        item.price = altPrice;
+        break;
+      }
+    }
+  }
+}
+
 function extractItemsFromText(text) {
   const items = [];
   const lines = text.split(/\r?\n/).map(l => l.trim()).filter(Boolean);
@@ -85,9 +125,12 @@ function extractItemsFromText(text) {
       name &&
       !/^(наименование|материал|ед\.?\s*изм|кол\.?|цена|сумма)/i.test(name)
     ) {
-      items.push({ name, price });
+      items.push({ name, price, _raw: m[1] });
     }
   }
+
+  fixConcatenatedPrices(items);
+  items.forEach(it => delete it._raw);
 
   return items;
 }
