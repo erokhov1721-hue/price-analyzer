@@ -3,13 +3,14 @@ const express = require('express');
 const multer  = require('multer');
 const path    = require('path');
 const fs      = require('fs');
-const analyze  = require('./analyze');
+const analyze             = require('./analyze');
+const { analyzeBuffer }   = analyze;
 const parseKP  = require('./kpParser');
 const applyKP  = require('./kpApplier');
 const db       = require('./lib/db');
 
 const app  = express();
-const PORT = process.env.PORT || 3000;
+const PORT = process.env.PORT || 3001;
 const TMP  = path.join(__dirname, 'uploads');
 
 if (!fs.existsSync(TMP)) fs.mkdirSync(TMP);
@@ -69,7 +70,12 @@ app.get('/api/projects/:id/analyses', async (req, res) => {
   catch (e) { res.status(500).json({ error: e.message }); }
 });
 
-app.post('/api/projects/:id/analyze', upload.single('file'), async (req, res) => {
+app.post('/api/projects/:id/analyze', (req, res, next) => {
+  upload.single('file')(req, res, err => {
+    if (err) return res.status(400).json({ error: err.message });
+    next();
+  });
+}, async (req, res) => {
   if (!req.file) return res.status(400).json({ error: 'Файл не передан (.xlsx обязателен)' });
 
   const projectId = req.params.id;
@@ -87,19 +93,28 @@ app.post('/api/projects/:id/analyze', upload.single('file'), async (req, res) =>
     analysisId = analysis.id;
 
     const srcBuffer = fs.readFileSync(tmpPath);
+    console.log(`[UPLOAD] Исходный файл: "${origName}", буфер: ${srcBuffer.length} байт`);
+
     const srcPath   = `${projectId}/${analysisId}/source.xlsx`;
+    console.log(`[UPLOAD] Загрузка source → ${srcPath}`);
     await db.uploadFile(srcPath, srcBuffer, 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
     await db.createFile({ analysisId, fileType: 'source', storagePath: srcPath });
+    console.log(`[UPLOAD] source загружен`);
 
-    const { analysisPath, requestPath } = await analyze(tmpPath);
+    console.log(`[UPLOAD] Запуск analyzeBuffer...`);
+    const { analysisBuffer, requestBuffer } = await analyzeBuffer(srcBuffer);
+    console.log(`[UPLOAD] analyzeBuffer завершён: analysis=${analysisBuffer.length} байт, request=${requestBuffer.length} байт`);
     console.log = origLog; console.warn = origWarn;
 
     const anaPath = `${projectId}/${analysisId}/analysis.xlsx`;
     const reqPath = `${projectId}/${analysisId}/request.xlsx`;
-    await db.uploadFile(anaPath, fs.readFileSync(analysisPath), 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
-    await db.uploadFile(reqPath, fs.readFileSync(requestPath),  'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+    console.log(`[UPLOAD] Загрузка analysis → ${anaPath} (${analysisBuffer.length} байт)`);
+    await db.uploadFile(anaPath, analysisBuffer, 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+    console.log(`[UPLOAD] Загрузка request  → ${reqPath} (${requestBuffer.length} байт)`);
+    await db.uploadFile(reqPath, requestBuffer,  'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
     await db.createFile({ analysisId, fileType: 'analysis', storagePath: anaPath });
     await db.createFile({ analysisId, fileType: 'request',  storagePath: reqPath });
+    console.log(`[UPLOAD] Все файлы успешно записаны в Supabase`);
 
     const logStr = logs.join('\n');
     const m = logStr.match(/Обработано строк:\s+(\d+)[\s\S]*?авто[^:]+:\s+(\d+)[\s\S]*?уточнения:\s+(\d+)/);
@@ -109,7 +124,7 @@ app.post('/api/projects/:id/analyze', upload.single('file'), async (req, res) =>
       statsRequest: m ? parseInt(m[3]) : 0,
     });
 
-    [tmpPath, analysisPath, requestPath].forEach(f => { try { fs.unlinkSync(f); } catch {} });
+    try { fs.unlinkSync(tmpPath); } catch {}
     res.json({ analysis: completed, log: logStr });
 
   } catch (err) {
@@ -160,15 +175,22 @@ app.get('/api/files/:id/download', async (req, res) => {
     const row = await db.getFile(req.params.id);
     if (!row) return res.status(404).json({ error: 'Файл не найден' });
 
+    console.log(`[DOWNLOAD] file_id=${req.params.id} file_type=${row.file_type} path=${row.storage_path}`);
+
     const buffer = await db.downloadFile(row.storage_path);
+    console.log(`[DOWNLOAD] буфер из Supabase: ${buffer.length} байт → отправляем клиенту`);
+
     const suffix = { source: '', analysis: '_analysis', request: '_request' }[row.file_type] || '';
     const base   = path.basename(row.analyses.filename, '.xlsx');
     const fname  = encodeURIComponent(base + suffix + '.xlsx');
 
     res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
     res.setHeader('Content-Disposition', `attachment; filename*=UTF-8''${fname}`);
+    res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate');
+    res.setHeader('Pragma', 'no-cache');
     res.send(buffer);
   } catch (e) {
+    console.error(`[DOWNLOAD] ОШИБКА: ${e.message}`);
     res.status(500).json({ error: e.message });
   }
 });

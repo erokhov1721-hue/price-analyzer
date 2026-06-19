@@ -165,8 +165,15 @@ const api = {
 //  PROJECTS
 // ═══════════════════════════════════════════════════════
 async function loadProjects() {
-  const projects = await api.get('/api/projects');
-  renderProjects(projects);
+  try {
+    const projects = await api.get('/api/projects');
+    if (projects.error) throw new Error(projects.error);
+    renderProjects(projects);
+  } catch (err) {
+    document.getElementById('projectsList').innerHTML =
+      `<div class="sidebar-empty" style="color:#e74c3c">Ошибка загрузки</div>`;
+    console.error('loadProjects:', err.message);
+  }
 }
 
 function renderProjects(projects) {
@@ -322,16 +329,30 @@ async function openProject(id, name, desc) {
 }
 
 document.getElementById('btnCreateProject').onclick = async () => {
-  const name = document.getElementById('newProjectName').value.trim();
-  if (!name) return;
-  const p = await api.post('/api/projects', {
-    name,
-    description: document.getElementById('newProjectDesc').value.trim(),
-  });
-  document.getElementById('newProjectName').value = '';
-  document.getElementById('newProjectDesc').value = '';
-  await loadProjects();
-  openProject(p.id, p.name, p.description || '');
+  const nameInput = document.getElementById('newProjectName');
+  const name = nameInput.value.trim();
+  if (!name) { nameInput.focus(); return; }
+
+  const btn = document.getElementById('btnCreateProject');
+  btn.disabled = true;
+  btn.innerHTML = '<i class="bi bi-arrow-repeat"></i> Создаём…';
+
+  try {
+    const p = await api.post('/api/projects', {
+      name,
+      description: document.getElementById('newProjectDesc').value.trim(),
+    });
+    if (p.error) throw new Error(p.error);
+    document.getElementById('newProjectName').value = '';
+    document.getElementById('newProjectDesc').value = '';
+    await loadProjects();
+    openProject(p.id, p.name, p.description || '');
+  } catch (err) {
+    showToast('Ошибка: ' + err.message);
+  } finally {
+    btn.disabled = false;
+    btn.innerHTML = '<i class="bi bi-plus-lg"></i> Создать проект';
+  }
 };
 
 document.getElementById('btnDeleteProject').onclick = async () => {
@@ -609,7 +630,7 @@ function plural(n) {
 async function downloadFile(fileId, chipEl) {
   chipEl.classList.add('loading');
   try {
-    const resp = await fetch(`/api/files/${fileId}/download`);
+    const resp = await fetch(`/api/files/${fileId}/download?t=${Date.now()}`, { cache: 'no-store' });
     if (!resp.ok) {
       const body = await resp.json().catch(() => ({ error: 'Неизвестная ошибка' }));
       throw new Error(body.error || `HTTP ${resp.status}`);

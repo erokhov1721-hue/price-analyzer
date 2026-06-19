@@ -3,57 +3,69 @@
 const ExcelJS       = require('exceljs');
 const { matchItems } = require('./matcher');
 
-// ── Вспомогательные функции (аналогичны analyze.js) ──────────────────────────
+// ── Вспомогательные функции (идентичны analyze.js) ───────────────────────────
 
-function cellStr(cell) {
-  if (!cell) return '';
+/** Извлекает текст из ячейки любого типа: plain, formula, RichText, Date */
+function cellText(cell) {
+  if (!cell || cell.value == null) return '';
   const v = cell.value;
-  if (v === null || v === undefined) return '';
-  if (typeof v === 'object' && v.result !== undefined)
-    return v.result != null ? String(v.result).trim() : '';
-  return String(v).trim();
+  if (typeof v === 'object') {
+    if (Array.isArray(v.richText)) return v.richText.map(r => r.text || '').join('');
+    if (v.result   !== undefined)  return v.result  != null ? String(v.result)  : '';
+    if (v.text     !== undefined)  return String(v.text);
+    if (v instanceof Date)         return v.toISOString();
+  }
+  return String(v);
 }
 
-/** Ищет строку с заголовками цен (Цена за единицу материала YYYY) */
+function cellStr(cell) { return cellText(cell).trim(); }
+
+/** Ищет строку с заголовками цен — многопроходный поиск, строки 1–25 */
 function findHeaderRow(sheet) {
-  for (let r = 1; r <= 10; r++) {
-    const vals = [];
-    sheet.getRow(r).eachCell({ includeEmpty: true }, (cell, col) => {
-      vals[col - 1] = cell.value ? cell.value.toString() : '';
-    });
-    if (vals.some(v => /цена за единицу материала\s+\d{4}/i.test(v)))
-      return { rowNum: r, headers: vals };
+  const PASSES = [
+    /цена за единицу материала\s*\d{4}/i,
+    /цена за единицу\s*\d{4}/i,
+    /цена за ед\.?\s*\d{4}/i,
+    /цена\s+20\d{2}/i,
+    /сумма\s*разница/i,
+    /разница/i,
+  ];
+
+  for (let pass = 0; pass < PASSES.length; pass++) {
+    const p = PASSES[pass];
+    for (let r = 1; r <= 25; r++) {
+      const vals = [];
+      sheet.getRow(r).eachCell({ includeEmpty: true }, (cell, col) => {
+        vals[col - 1] = cellText(cell);
+      });
+      if (vals.some(v => p.test(v)))
+        return { rowNum: r, headers: vals };
+    }
   }
   return null;
 }
 
 /** Возвращает номер первого столбца блока «Анализ MR Group» или null */
 function findExistingMRBlock(sheet, headerRowNum) {
-  if (headerRowNum > 1) {
+  // Ищем "Анализ MR Group" во всех строках от 1 до headerRowNum включительно.
+  for (let r = 1; r <= headerRowNum; r++) {
     let found = null;
-    sheet.getRow(headerRowNum - 1).eachCell({ includeEmpty: false }, (cell, col) => {
-      if (!found && cell.value && cell.value.toString().includes('Анализ MR Group'))
-        found = col;
+    sheet.getRow(r).eachCell({ includeEmpty: false }, (cell, col) => {
+      if (!found && cellText(cell).includes('Анализ MR Group')) found = col;
     });
     if (found) return found;
   }
-  let found = null;
-  sheet.getRow(headerRowNum).eachCell({ includeEmpty: false }, (cell, col) => {
-    if (!found && cell.value &&
-        cell.value.toString().includes('Цена за единицу материала 2025'))
-      found = col;
-  });
-  return found;
+  return null;
 }
 
 /** Ищет первый столбец, заголовок которого содержит один из паттернов */
-function findColInSheet(sheet, patterns, maxRow = 10) {
+function findColInSheet(sheet, patterns, maxRow = 15) {
   for (let r = 1; r <= maxRow; r++) {
     let found = null;
     sheet.getRow(r).eachCell({ includeEmpty: true }, (cell, col) => {
-      if (found || !cell.value) return;
-      const str = cell.value.toString().toLowerCase();
-      if (patterns.some(p => str.includes(p))) found = col;
+      if (found) return;
+      const str = cellText(cell).toLowerCase().replace(/\s+/g, ' ').trim();
+      if (str && patterns.some(p => str.includes(p))) found = col;
     });
     if (found) return found;
   }
